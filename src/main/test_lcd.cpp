@@ -7,25 +7,33 @@ String gifFiles[MAX_GIFS];
 int totalGifs = 0;
 int currentGifIndex = 0;
 
+// Buffer de trabajo para conversión (ancho máximo 320)
+static uint16_t lineBuffer[320];
+
 // Callback para dibujar el GIF
 static void GIFDraw(GIFDRAW *pDraw) {
-  uint16_t *pixels = (uint16_t *)pDraw->pPixels;
-  uint8_t *pPalette = (uint8_t *)pDraw->pPalette;
+  uint8_t *pIdx = (uint8_t *)pDraw->pPixels;
+  uint8_t *pPal = (uint8_t *)pDraw->pPalette;
 
-  // Convertir RGB888 a RGB565
-  for (int i = 0; i < pDraw->iWidth; i++) {
-    uint8_t r = pPalette[(pDraw->pPixels[i] * 3) + 0];
-    uint8_t g = pPalette[(pDraw->pPixels[i] * 3) + 1];
-    uint8_t b = pPalette[(pDraw->pPixels[i] * 3) + 2];
-    pixels[i] = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+  for (int x = 0; x < pDraw->iWidth; x++) {
+    uint8_t idx = pIdx[x];
+    uint8_t r = pPal[idx * 3 + 0];
+    uint8_t g = pPal[idx * 3 + 1];
+    uint8_t b = pPal[idx * 3 + 2];
+    uint16_t c = ((r & 0xF8) << 8)
+                 | ((g & 0xFC) << 3)
+                 | (b >> 3);
+    // swap bytes para ILI9341
+    lineBuffer[x] = (c >> 8) | (c << 8);
   }
 
-  // Dibujar en la pantalla
   tft.startWrite();
-  tft.setAddrWindow(pDraw->iX, pDraw->iY + pDraw->y, pDraw->iWidth, 1);
-  tft.writePixels(pixels, pDraw->iWidth);
+  tft.setAddrWindow(pDraw->iX, pDraw->iY + pDraw->y,
+                    pDraw->iWidth, 1);
+  tft.writePixels(lineBuffer, pDraw->iWidth);
   tft.endWrite();
 }
+
 
 // Callback para leer datos del GIF
 static int32_t GIFRead(GIFFILE *pFile, uint8_t *pBuf, int32_t iLen) {
@@ -59,14 +67,14 @@ static void GIFClose(void *pHandle) {
 }
 
 void initLCD() {
-  SPI.begin(18, 19, 23, TFT_CS);
+  SPI.begin(18, 19, 23);
   tft.begin();
   tft.setRotation(1);
   tft.fillScreen(ILI9341_BLACK);
 }
 
 void initSD() {
-  if (!SD.begin(SD_CS, SPI)) {
+  if (!SD.begin(SD_CS)) {
     tft.println("Error SD!");
     delay(3000);
     return;
@@ -77,12 +85,11 @@ void initSD() {
   File root = SD.open("/");
   while (File entry = root.openNextFile()) {
     String name = String(entry.name());
-    name.toLowerCase();  // Convierte el nombre a minúsculas en sitio
-
-    // Ahora endsWith funciona porque name es un String ya modificado
+    name.toLowerCase();
+    name = name;
     if (!entry.isDirectory() && name.endsWith(".gif")) {
       if (totalGifs < MAX_GIFS) {
-        gifFiles[totalGifs++] = String(entry.name());
+        gifFiles[totalGifs++] = name;
       }
     }
     entry.close();
@@ -106,21 +113,16 @@ void playNextGIF() {
   static unsigned long startTime = 0;
   static bool isPlaying = false;
 
-  if (totalGifs == 0) {
-    // No hay GIFs, nada que hacer
-    return;
-  }
+  if (totalGifs == 0) return;
 
   if (!isPlaying) {
     tft.fillScreen(ILI9341_BLACK);
-    const char* filename = gifFiles[currentGifIndex].c_str();
-
+    String fullPath = "/" + gifFiles[currentGifIndex];
     tft.println("Abriendo:");
-    tft.println(filename);
+    tft.println(fullPath);
     delay(500);
 
-    // Verificamos existencia intentando abrir
-    File testFile = SD.open(filename, FILE_READ);
+    File testFile = SD.open(fullPath, FILE_READ);
     if (!testFile) {
       tft.println("No existe o error!");
       delay(1000);
@@ -129,8 +131,7 @@ void playNextGIF() {
     }
     testFile.close();
 
-    // Ahora abrimos para AnimatedGIF
-    if (gif.open(filename, GIFOpen, GIFClose, GIFRead, GIFSeek, GIFDraw)) {
+    if (gif.open(fullPath.c_str(), GIFOpen, GIFClose, GIFRead, GIFSeek, GIFDraw)) {
       startTime = millis();
       isPlaying = true;
     } else {
@@ -138,15 +139,17 @@ void playNextGIF() {
       delay(1000);
       currentGifIndex = (currentGifIndex + 1) % totalGifs;
     }
+    return;
   }
 
-  if (isPlaying) {
-    if (gif.playFrame(false, nullptr)) {
-      if (millis() - startTime >= 5000) {
-        gif.close();
-        isPlaying = false;
-        currentGifIndex = (currentGifIndex + 1) % totalGifs;
-      }
-    }
+  // Si está reproduciendo, siempre llamo playFrame
+  // para procesar sub-bloque tras sub-bloque.
+  gif.playFrame(false, nullptr);
+
+  // Y al mismo tiempo veo si pasaron 5s:
+  if (millis() - startTime >= 5000) {
+    gif.close();
+    isPlaying = false;
+    currentGifIndex = (currentGifIndex + 1) % totalGifs;
   }
 }

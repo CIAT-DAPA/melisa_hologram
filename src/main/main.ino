@@ -7,5 +7,5 @@ void setup() {
 
 void loop() {
   playNextGIF();
-  delay(10);
+  delay(1);
 }
