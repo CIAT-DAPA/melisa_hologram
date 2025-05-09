@@ -1,0 +1,16 @@
+Pantalla:
+3V3 -> VCC
+GND -> GND
+D27 -> CS
+D26 -> RESET
+D14 -> DC
+D23 -> MOSI
+D18 -> SCK
+3V3 -> LED
+D19 -> MISO
+
+SD Pantalla
+D5 -> CS
+D19 -> MISO
+D23 -> MOSI
+D18 -> SCK
