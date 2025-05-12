@@ -9,8 +9,12 @@ D18 -> SCK
 3V3 -> LED
 D19 -> MISO
 
-SD Pantalla
+SD Pantalla:
 D5 -> CS
 D19 -> MISO
 D23 -> MOSI
 D18 -> SCK
+
+Microfono:
+GND -> GND
+GND -> L/R

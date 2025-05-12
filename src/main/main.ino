@@ -107,7 +107,6 @@ void loop() {
     currentFolderIndex = (currentFolderIndex + 1) % 3;
     lastFolderSwitch = now;
     lastFrameTime = now;
-    tft.fillScreen(ILI9341_BLACK);
     Serial.printf("Switched to animation %d\n", currentFolderIndex);
   }
 
