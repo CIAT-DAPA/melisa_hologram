@@ -11,10 +11,14 @@ D19 -> MISO
 
 SD Pantalla:
 D5 -> CS
-D19 -> MISO
 D23 -> MOSI
+D19 -> MISO
 D18 -> SCK
 
 Microfono:
 GND -> GND
 GND -> L/R
+3V3 -> VDD
+D33 -> SD
+D32 -> WS
+D25 -> SCK

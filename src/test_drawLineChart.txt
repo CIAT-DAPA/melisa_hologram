@@ -1,0 +1,146 @@
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ILI9341.h>
+#include <ArduinoJson.h>
+
+// Pines ILI9341 en ESP32
+#define TFT_CS   27
+#define TFT_RST  26
+#define TFT_DC   14
+#define TFT_MOSI 23
+#define TFT_SCLK 18
+#define TFT_MISO 19
+
+Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
+
+// JSON con mínimo 20 datos
+const char* jsonData = R"rawliteral(
+[
+  {"day":1, "month":1, "temperature": 18},
+  {"day":2, "month":1, "temperature": 22},
+  {"day":3, "month":1, "temperature": 19},
+  {"day":4, "month":1, "temperature": 23},
+  {"day":5, "month":1, "temperature": 25},
+  {"day":6, "month":1, "temperature": 21},
+  {"day":7, "month":1, "temperature": 20},
+  {"day":8, "month":1, "temperature": 24},
+  {"day":9, "month":1, "temperature": 26},
+  {"day":10,"month":1, "temperature": 27},
+  {"day":11,"month":1, "temperature": 23},
+  {"day":12,"month":1, "temperature": 22},
+  {"day":13,"month":1, "temperature": 24},
+  {"day":14,"month":1, "temperature": 28},
+  {"day":15,"month":1, "temperature": 30},
+  {"day":16,"month":1, "temperature": 29},
+  {"day":17,"month":1, "temperature": 31},
+  {"day":18,"month":1, "temperature": 28},
+  {"day":19,"month":1, "temperature": 26},
+  {"day":20,"month":1, "temperature": 27},
+  {"day":21,"month":1, "temperature": 25},
+  {"day":22,"month":1, "temperature": 24},
+  {"day":23,"month":1, "temperature": 23},
+  {"day":24,"month":1, "temperature": 22},
+  {"day":25,"month":1, "temperature": 21},
+  {"day":26,"month":1, "temperature": 20},
+  {"day":27,"month":1, "temperature": 19},
+  {"day":28,"month":1, "temperature": 18},
+  {"day":29,"month":1, "temperature": 17},
+  {"day":30,"month":1, "temperature": 16}
+]
+)rawliteral";
+
+struct DataPoint {
+  int day, month, temp;
+};
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial);
+
+  tft.begin();
+  tft.setRotation(1);
+  tft.fillScreen(ILI9341_BLACK);
+
+  // Parsear JSON
+  StaticJsonDocument<1024> doc;
+  DeserializationError err = deserializeJson(doc, jsonData);
+  if (err) {
+    Serial.println("Error parseando JSON");
+    return;
+  }
+
+  // Extraer datos
+  JsonArray arr = doc.as<JsonArray>();
+  int n = arr.size();
+  DataPoint pts[n];
+  int minT = INT_MAX, maxT = INT_MIN;
+  for (int i = 0; i < n; i++) {
+    pts[i].day   = arr[i]["day"];
+    pts[i].month = arr[i]["month"];
+    pts[i].temp  = arr[i]["temperature"];
+    minT = min(minT, pts[i].temp);
+    maxT = max(maxT, pts[i].temp);
+  }
+
+  drawGrid(minT, maxT);
+  plotData(pts, n, minT, maxT);
+}
+
+void loop() {
+  // Nada aquí
+}
+
+// Dibuja ejes y líneas de rejilla cada 5°C
+void drawGrid(int minT, int maxT) {
+  const int m = 30;
+  int x0 = m, y0 = tft.height()-m;
+  int x1 = tft.width()-m, y1 = m;
+
+  // Ejes principales
+  tft.drawLine(x0, y0, x1, y0, ILI9341_WHITE); // X
+  tft.drawLine(x0, y0, x0, y1, ILI9341_WHITE); // Y
+
+  // Líneas horizontales y etiquetas Y cada 5°C
+  int startY = (minT/5)*5;
+  int endY   = ((maxT + 4)/5)*5;
+  tft.setTextSize(1);
+  tft.setTextColor(ILI9341_CYAN);
+  for (int t = startY; t <= endY; t += 5) {
+    int y = map(t, startY, endY, y0, y1);
+    tft.drawFastHLine(x0, y, x1 - x0, ILI9341_DARKGREY);
+    tft.setCursor(5, y - 4);
+    tft.print(t);
+  }
+}
+
+// Dibuja la línea y etiquetas de fecha en el eje X
+void plotData(DataPoint *pts, int n, int minT, int maxT) {
+  const int m = 30;
+  int x0 = m, y0 = tft.height()-m;
+  int x1 = tft.width()-m, y1 = m;
+
+  int prevX=0, prevY=0;
+  bool first = true;
+
+  tft.setTextSize(1);
+  tft.setTextColor(ILI9341_YELLOW);
+
+  for (int i = 0; i < n; i++) {
+    // Coordenadas del punto
+    int x = map(i, 0, n-1, x0, x1);
+    int y = map(pts[i].temp, minT, maxT, y0, y1);
+
+    // Dibuja punto y línea
+    tft.fillCircle(x, y, 3, ILI9341_RED);
+    if (!first) tft.drawLine(prevX, prevY, x, y, ILI9341_RED);
+    prevX = x; prevY = y; first = false;
+
+    // Etiqueta de fecha cada 5 puntos para no sobrecargar
+    if (i % 5 == 0 || i == n-1) {
+      char buf[8];
+      sprintf(buf, "%02d/%02d", pts[i].day, pts[i].month);
+      tft.setCursor(x-12, y0 + 5);
+      tft.print(buf);
+    }
+  }
+}
