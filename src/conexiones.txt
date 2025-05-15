@@ -22,3 +22,12 @@ GND -> L/R
 D33 -> SD
 D25 -> WS
 D32 -> SCK
+
+Amplificador Max98357
+3V3 -> VIN
+GND -> GND
+SD -> No conectado
+GAIN -> GND
+D21 -> DIN
+D13 -> BCLK
+D4 -> LRC
