@@ -1,4 +1,4 @@
-Pantalla:
+Pantalla ILI9341 no-touch:
 3V3 -> VCC
 GND -> GND
 D27 -> CS
@@ -9,16 +9,16 @@ D18 -> SCK
 3V3 -> LED
 D19 -> MISO
 
-SD Pantalla:
+SD de la pantalla:
 D5 -> CS
 D23 -> MOSI
 D19 -> MISO
 D18 -> SCK
 
-Microfono:
+Microfono INMP441:
 GND -> GND
 GND -> L/R
 3V3 -> VDD
 D33 -> SD
-D32 -> WS
-D25 -> SCK
+D25 -> WS
+D32 -> SCK
