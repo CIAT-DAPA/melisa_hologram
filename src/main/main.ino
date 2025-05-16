@@ -3,13 +3,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_ILI9341.h>
 #include <PNGdec.h>
-#include "esp32dumbdisplay.h"
 #include <driver/i2s.h>
-
-// —————— Bluetooth DumbDisplay ——————
-#define BLUETOOTH "ESP32BT"
-DumbDisplay dumbdisplay(new DDBluetoothSerialIO(BLUETOOTH));
-int soundChunkId = -1;
 
 // —————— I²S MIC (INMP441) ——————
 #define I2S_WS 25
@@ -47,6 +41,13 @@ Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
 PNG png;
 uint16_t lineBuf[256];
 const int16_t X_OFF = (320 - 256) / 2, Y_OFF = (240 - 256) / 2;
+
+// Variables para calibración
+bool systemCalibrated = false;
+const int CALIBRATION_SAMPLES = 100;
+int calibrationCounter = 0;
+int16_t noiseFloor = 0;
+int16_t THRESH = 200;  // Será redefinido durante la calibración
 
 // Callbacks PNGdec
 static void* pngOpen(const char* name, int32_t* size) {
@@ -101,12 +102,20 @@ enum State { IDLE,
              TALK } state = IDLE;
 
 // Umbral y temporización
-const int16_t THRESH = 200;  // ajustar según tu micrófono
 uint32_t talkStartMs = 0;
 uint32_t silenceStartMs = 0;
-const uint32_t SILENCE_DELAY_MS = 250;
-const uint32_t VOICE_DELAY_MS = 500;
+const uint32_t SILENCE_DELAY_MS = 500;  // Aumentado a 500ms (era 250ms)
+const uint32_t VOICE_DELAY_MS = 1000;   // Aumentado a 1000ms (era 500ms)
 uint32_t voiceStartMs = 0;
+const int SAMPLES_FOR_DECISION = 5;
+int16_t recentAmps[SAMPLES_FOR_DECISION] = { 0 };
+int sampleIndex = 0;
+bool voiceDetected = false;
+
+// Variables para duración mínima
+uint32_t voiceStartTime = 0;
+uint32_t voiceEndTime = 0;
+const uint32_t MIN_VOICE_DURATION = 100;  // ms
 
 // —————— Funciones I2S ——————
 esp_err_t installI2S() {
@@ -167,7 +176,9 @@ void audioTask(void* param) {
   File wav = SD.open("/audio/test1.wav");
   if (!wav) {
     Serial.println("ERROR: Cannot open WAV");
+    audioPlaying = false;
     vTaskDelete(NULL);
+    return;
   }
   wav.seek(24);
   uint32_t sampleRate;
@@ -180,31 +191,49 @@ void audioTask(void* param) {
     i2s_write(I2S_NUM, buffer, bytesRead, &bytesWritten, portMAX_DELAY);
   }
   wav.close();
+  audioPlaying = false;
   vTaskDelete(NULL);
 }
 
 void setup() {
   Serial.begin(115200);
+
+  // Inicializar el buffer de muestras
+  for (int i = 0; i < SAMPLES_FOR_DECISION; i++) {
+    recentAmps[i] = 0;
+  }
+
   // — TFT + SD —
   tft.begin();
   tft.setRotation(1);
   tft.fillScreen(ILI9341_BLACK);
+
+  // Mostrar mensaje de calibración
+  tft.setCursor(30, 100);
+  tft.setTextColor(ILI9341_YELLOW);
+  tft.setTextSize(2);
+  tft.println("Calibrando microfono...");
+  tft.setCursor(30, 130);
+  tft.println("Mantenga silencio");
+
+  Serial.println("Iniciando calibración de micrófono...");
+
   if (!SD.begin(SD_CS)) {
+    tft.fillScreen(ILI9341_BLACK);
+    tft.setCursor(30, 100);
+    tft.setTextColor(ILI9341_RED);
+    tft.println("ERROR: SD no detectada!");
     while (1)
       ;
   }
+
   // — I2S —
   installI2S();
   configPins();
   i2s_zero_dma_buffer(I2S_PORT);
   i2s_start(I2S_PORT);
   setupI2SOutput();
-  // — Bluetooth audio —
-  dumbdisplay.recordLayerSetupCommands();
-  dumbdisplay.playbackLayerSetupCommands("stream");
-  soundChunkId = dumbdisplay.streamSound16(SAMPLE_RATE, CHANNEL_COUNT);
 }
-
 
 void loop() {
   // 1) Leer I2S
@@ -220,23 +249,97 @@ void loop() {
     if (v > maxAmp) maxAmp = v;
   }
 
-  // *** Serial debug ***
+  // Fase de calibración - determinar el nivel de ruido ambiente
+  if (!systemCalibrated) {
+    calibrationCounter++;
+    noiseFloor += maxAmp;
+
+    if (calibrationCounter >= CALIBRATION_SAMPLES) {
+      noiseFloor /= CALIBRATION_SAMPLES;
+      // Establecer un umbral dinámico basado en el ruido ambiente
+      // Típicamente 2-3 veces el nivel de ruido es un buen punto de partida
+      const int16_t SAFE_MARGIN = 3;
+      THRESH = noiseFloor * SAFE_MARGIN;
+
+      // Asegurar un umbral mínimo
+      if (THRESH < 100) THRESH = 100;
+
+      systemCalibrated = true;
+
+      // Mostrar los resultados de calibración
+      Serial.print("Calibración completada. Nivel de ruido: ");
+      Serial.print(noiseFloor);
+      Serial.print(" | Nuevo umbral: ");
+      Serial.println(THRESH);
+
+      tft.fillScreen(ILI9341_BLACK);
+      tft.setCursor(30, 100);
+      tft.setTextColor(ILI9341_GREEN);
+      tft.println("Calibracion completa!");
+      tft.setCursor(30, 130);
+      tft.print("Umbral: ");
+      tft.println(THRESH);
+      delay(1500);
+
+      // Inicializar buffer con nuevos valores
+      for (int i = 0; i < SAMPLES_FOR_DECISION; i++) {
+        recentAmps[i] = 0;
+      }
+
+      // Reiniciar variables de estado
+      voiceDetected = false;
+      sampleIndex = 0;
+    }
+    return;  // Salir mientras se calibra
+  }
+
+  // 3) Almacenar en buffer circular y calcular promedio para decisiones más estables
+  recentAmps[sampleIndex] = maxAmp;
+  sampleIndex = (sampleIndex + 1) % SAMPLES_FOR_DECISION;
+
+  int16_t avgAmp = 0;
+  for (int i = 0; i < SAMPLES_FOR_DECISION; i++) {
+    avgAmp += recentAmps[i];
+  }
+  avgAmp /= SAMPLES_FOR_DECISION;
+
+  // Histéresis proporcional
+  int16_t histHigh = THRESH * 0.3;  // 30% del umbral
+  int16_t histLow = THRESH * 0.2;   // 20% del umbral
+
+  // Detección con histéresis y duración mínima
+  if (!voiceDetected && avgAmp > THRESH + histHigh) {
+    voiceStartTime = millis();
+    // Solo activamos si la voz persiste por al menos MIN_VOICE_DURATION
+    if (voiceStartTime - voiceEndTime > MIN_VOICE_DURATION) {
+      voiceDetected = true;
+      Serial.println("VOZ DETECTADA");
+    }
+  } else if (voiceDetected && avgAmp < THRESH - histLow) {
+    voiceEndTime = millis();
+    // Solo desactivamos si el silencio persiste
+    if (voiceEndTime - voiceStartTime > MIN_VOICE_DURATION) {
+      voiceDetected = false;
+      Serial.println("VOZ TERMINADA");
+    }
+  }
+
+  // *** Serial debug mejorado ***
   Serial.print("THRESH = ");
   Serial.print(THRESH);
-  Serial.print("  |  maxAmp = ");
-  Serial.println(maxAmp);
+  Serial.print(" | maxAmp = ");
+  Serial.print(maxAmp);
+  Serial.print(" | avgAmp = ");
+  Serial.print(avgAmp);
+  Serial.print(" | voiceDetected = ");
+  Serial.println(voiceDetected ? "SI" : "NO");
   // ********************
-
-  // 3) Enviar audio al teléfono
-  if (soundChunkId >= 0 && bytesRead > 0) {
-    dumbdisplay.sendSoundChunk16(soundChunkId, buf16, samples, false);
-  }
 
   // 4) Lógica de estado VAD con retardo de detección de voz
   uint32_t now = millis();
   switch (state) {
     case IDLE:
-      if (maxAmp > THRESH) {
+      if (voiceDetected) {  // Usar la variable estabilizada en lugar de maxAmp > THRESH
         // Si es la primera vez que detectamos voz, iniciamos el conteo
         if (voiceStartMs == 0) {
           voiceStartMs = now;
@@ -260,7 +363,7 @@ void loop() {
       break;
 
     case THINK:
-      if (maxAmp > THRESH) {
+      if (voiceDetected) {  // Usar la variable estabilizada en lugar de maxAmp > THRESH
         // Sigue hablando: mantenemos THINK y reiniciamos silencio
         silenceStartMs = 0;
         playAnim("think", 9, thinkDelays);
@@ -279,6 +382,7 @@ void loop() {
       break;
 
     case TALK:
+      // El resto del caso TALK permanece igual
       // Inicia la tarea solo una vez
       if (!audioPlaying) {
         audioPlaying = true;
@@ -296,7 +400,7 @@ void loop() {
       // Siempre seguimos animando
       playAnim("talk", 10, talkDelays);
 
-      // Tras 3 s volvemos a IDLE
+      // Tras 3 s volvemos a IDLE
       if (millis() - talkStartMs >= 3000) {
         state = IDLE;
         audioPlaying = false;
