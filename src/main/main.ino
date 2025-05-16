@@ -162,42 +162,25 @@ void setupI2SOutput() {
 
 bool audioPlaying = false;
 
-void playAudio() {
-  if (audioPlaying) return;  // Don't call multiple times
-  audioPlaying = true;
-
+void audioTask(void* param) {
+  // Usa tu código de playAudio() aquí:
   File wav = SD.open("/audio/test1.wav");
   if (!wav) {
-    Serial.println("ERROR: Cannot open WAV file");
-    audioPlaying = false;
-    return;
+    Serial.println("ERROR: Cannot open WAV");
+    vTaskDelete(NULL);
   }
-
-  // Read WAV header for sample rate
   wav.seek(24);
   uint32_t sampleRate;
   wav.read((uint8_t*)&sampleRate, 4);
-  Serial.print("Sample Rate: ");
-  Serial.println(sampleRate);
-
-  // Reconfigure I2S with actual sample rate
   i2s_set_sample_rates(I2S_NUM, sampleRate);
-
-  // Skip header (44 bytes)
   wav.seek(44);
-
   uint8_t buffer[BUFFER_SIZE];
-  size_t bytesRead;
-  size_t bytesWritten;
-
-  Serial.println("Starting playback...");
+  size_t bytesRead, bytesWritten;
   while ((bytesRead = wav.read(buffer, BUFFER_SIZE)) > 0) {
     i2s_write(I2S_NUM, buffer, bytesRead, &bytesWritten, portMAX_DELAY);
   }
-
-  Serial.println("Playback finished.");
   wav.close();
-  audioPlaying = false;
+  vTaskDelete(NULL);
 }
 
 void setup() {
@@ -296,13 +279,25 @@ void loop() {
       break;
 
     case TALK:
-      // Mostramos TALK 3 s y luego volvemos a IDLE
-      if (now - talkStartMs < 3000) {
-        playAnim("talk", 10, talkDelays);
-        if (!audioPlaying) {
-          playAudio();
-        }
-      } else {
+      // Inicia la tarea solo una vez
+      if (!audioPlaying) {
+        audioPlaying = true;
+        // Pínala al core 1 para no interferir con I²S lecturas en core 0
+        xTaskCreatePinnedToCore(
+          audioTask,    // función
+          "AudioTask",  // nombre
+          4096,         // tamaño de stack (ajusta si falla)
+          NULL,         // parámetro
+          1,            // prioridad
+          NULL,         // handle
+          1             // core
+        );
+      }
+      // Siempre seguimos animando
+      playAnim("talk", 10, talkDelays);
+
+      // Tras 3 s volvemos a IDLE
+      if (millis() - talkStartMs >= 3000) {
         state = IDLE;
         audioPlaying = false;
       }
