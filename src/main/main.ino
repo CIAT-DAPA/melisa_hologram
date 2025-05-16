@@ -20,6 +20,14 @@ int soundChunkId = -1;
 #define CHANNEL_COUNT 1
 #define I2S_PORT I2S_NUM_0
 
+// —————— I²S AMP (MAX98357) ——————
+#define I2S_BCK 13
+#define I2S_LRC 4
+#define I2S_DIN 21
+#define I2S_NUM I2S_NUM_1
+#define I2S_SAMPLE_BITS 16
+#define BUFFER_SIZE 1024
+
 // Buffer I²S
 static const int BUF_BYTES = (SAMPLE_RATE == 16000 ? 512 : 256);
 static const int BUF_LEN = (I2S_BITS == 32 ? BUF_BYTES / 4 : BUF_BYTES / 2);
@@ -126,6 +134,72 @@ esp_err_t configPins() {
   return i2s_set_pin(I2S_PORT, &pins);
 }
 
+void setupI2SOutput() {
+  i2s_config_t i2s_config = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+    .sample_rate = 44100,  // Default, will be updated based on WAV
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+    .communication_format = I2S_COMM_FORMAT_I2S_MSB,
+    .intr_alloc_flags = 0,
+    .dma_buf_count = 8,
+    .dma_buf_len = 64,
+    .use_apll = false
+  };
+
+  i2s_pin_config_t pin_config = {
+    .mck_io_num = I2S_PIN_NO_CHANGE,
+    .bck_io_num = I2S_BCK,
+    .ws_io_num = I2S_LRC,
+    .data_out_num = I2S_DIN,
+    .data_in_num = I2S_PIN_NO_CHANGE
+  };
+
+  i2s_driver_install(I2S_NUM, &i2s_config, 0, NULL);
+  i2s_set_pin(I2S_NUM, &pin_config);
+  i2s_zero_dma_buffer(I2S_NUM);
+}
+
+bool audioPlaying = false;
+
+void playAudio() {
+  if (audioPlaying) return;  // Don't call multiple times
+  audioPlaying = true;
+
+  File wav = SD.open("/audio/test1.wav");
+  if (!wav) {
+    Serial.println("ERROR: Cannot open WAV file");
+    audioPlaying = false;
+    return;
+  }
+
+  // Read WAV header for sample rate
+  wav.seek(24);
+  uint32_t sampleRate;
+  wav.read((uint8_t*)&sampleRate, 4);
+  Serial.print("Sample Rate: ");
+  Serial.println(sampleRate);
+
+  // Reconfigure I2S with actual sample rate
+  i2s_set_sample_rates(I2S_NUM, sampleRate);
+
+  // Skip header (44 bytes)
+  wav.seek(44);
+
+  uint8_t buffer[BUFFER_SIZE];
+  size_t bytesRead;
+  size_t bytesWritten;
+
+  Serial.println("Starting playback...");
+  while ((bytesRead = wav.read(buffer, BUFFER_SIZE)) > 0) {
+    i2s_write(I2S_NUM, buffer, bytesRead, &bytesWritten, portMAX_DELAY);
+  }
+
+  Serial.println("Playback finished.");
+  wav.close();
+  audioPlaying = false;
+}
+
 void setup() {
   Serial.begin(115200);
   // — TFT + SD —
@@ -141,6 +215,7 @@ void setup() {
   configPins();
   i2s_zero_dma_buffer(I2S_PORT);
   i2s_start(I2S_PORT);
+  setupI2SOutput();
   // — Bluetooth audio —
   dumbdisplay.recordLayerSetupCommands();
   dumbdisplay.playbackLayerSetupCommands("stream");
@@ -224,8 +299,12 @@ void loop() {
       // Mostramos TALK 3 s y luego volvemos a IDLE
       if (now - talkStartMs < 3000) {
         playAnim("talk", 10, talkDelays);
+        if (!audioPlaying) {
+          playAudio();
+        }
       } else {
         state = IDLE;
+        audioPlaying = false;
       }
       break;
   }
