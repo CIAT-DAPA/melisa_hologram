@@ -31,18 +31,17 @@ int32_t i2sBuf[BUF_LEN];
 int16_t i2sBuf[BUF_LEN];
 #endif
 
-// —————— Modulo SD ——————
-SPIClass spiAudio(HSPI);
-#define SD_CS_AUDIO 15
-#define SD_CLK_AUDIO 22
-#define SD_MISO_AUDIO 35
-#define SD_MOSI_AUDIO 2
+// —————— Módulo SD Único (para todo) ——————
+SPIClass spiSD(HSPI);
+#define SD_CS 15
+#define SD_CLK 22
+#define SD_MISO 35
+#define SD_MOSI 2
 
 // —————— TFT + PNG dec ——————
 #define TFT_CS 27
 #define TFT_RST 26
 #define TFT_DC 14
-#define SD_CS 5
 
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
 PNG png;
@@ -56,7 +55,7 @@ int calibrationCounter = 0;
 int16_t noiseFloor = 0;
 int16_t THRESH = 200;  // Será redefinido durante la calibración
 
-// Callbacks PNGdec
+// Callbacks PNGdec para usar el módulo SD único
 static void* pngOpen(const char* name, int32_t* size) {
   File* f = new File(SD.open(name, FILE_READ));
   if (f && *f) {
@@ -179,8 +178,10 @@ void setupI2SOutput() {
 bool audioPlaying = false;
 
 void audioTask(void* param) {
-  File wav = SD.open("/test1.wav");
+  // Ahora el archivo de audio también se lee del módulo SD externo
+  File wav = SD.open("/audio/test1.wav");
   if (!wav) {
+    Serial.println("Error: No se pudo abrir /test1.wav desde módulo SD");
     audioPlaying = false;
     vTaskDelete(NULL);
     return;
@@ -209,7 +210,7 @@ void setup() {
     recentAmps[i] = 0;
   }
 
-  // — TFT + SD —
+  // — TFT —
   tft.begin();
   tft.setRotation(1);
   tft.fillScreen(ILI9341_BLACK);
@@ -224,22 +225,42 @@ void setup() {
 
   Serial.println("Iniciando calibración de micrófono...");
 
-  if (!SD.begin(SD_CS)) {
+  // — Inicializar módulo SD único —
+  Serial.println("Inicializando módulo SD...");
+  spiSD.begin(SD_CLK, SD_MISO, SD_MOSI, SD_CS);
+  pinMode(SD_CS, OUTPUT);
+
+  if (!SD.begin(SD_CS, spiSD)) {
+    Serial.println("ERROR: Módulo SD no inicializado");
     tft.fillScreen(ILI9341_BLACK);
     tft.setCursor(30, 100);
     tft.setTextColor(ILI9341_RED);
     tft.println("ERROR: SD no detectada!");
-    while (1)
-      ;
+    while (1) {
+      delay(100);
+    }
   }
 
-  // — SPI HSPI para SD de audio —
-  spiAudio.begin(SD_CLK_AUDIO, SD_MISO_AUDIO, SD_MOSI_AUDIO, SD_CS_AUDIO);
-  pinMode(SD_CS_AUDIO, OUTPUT);
-  if (!SD.begin(SD_CS_AUDIO, spiAudio)) {
-    Serial.println("ERROR: SD audio no inicializada");
-    while (1) delay(100);
+  Serial.println("Módulo SD inicializado correctamente");
+
+  // Verificar la estructura de carpetas en el módulo SD
+  Serial.println("Verificando estructura de archivos...");
+  File root = SD.open("/");
+  File file = root.openNextFile();
+  while (file) {
+    if (file.isDirectory()) {
+      Serial.print("Carpeta encontrada: ");
+      Serial.println(file.name());
+    } else {
+      Serial.print("Archivo encontrado: ");
+      Serial.print(file.name());
+      Serial.print(" (");
+      Serial.print(file.size());
+      Serial.println(" bytes)");
+    }
+    file = root.openNextFile();
   }
+  root.close();
 
   // — I2S —
   installI2S();

@@ -9,12 +9,6 @@ D18 -> SCK
 3V3 -> LED
 D19 -> MISO
 
-SD de la pantalla:
-D5 -> CS
-D23 -> MOSI
-D19 -> MISO
-D18 -> SCK
-
 Microfono INMP441:
 GND -> GND
 GND -> L/R
