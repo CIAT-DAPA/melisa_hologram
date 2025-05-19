@@ -20,7 +20,7 @@
 #define I2S_DIN 21
 #define I2S_NUM I2S_NUM_1
 #define I2S_SAMPLE_BITS 16
-#define BUFFER_SIZE 1024
+#define WAV_BUF_SIZE 512
 
 // Buffer I²S
 static const int BUF_BYTES = (SAMPLE_RATE == 16000 ? 512 : 256);
@@ -30,6 +30,13 @@ int32_t i2sBuf[BUF_LEN];
 #else
 int16_t i2sBuf[BUF_LEN];
 #endif
+
+// —————— Modulo SD ——————
+SPIClass spiAudio(HSPI);
+#define SD_CS_AUDIO 15
+#define SD_CLK_AUDIO 22
+#define SD_MISO_AUDIO 35
+#define SD_MOSI_AUDIO 2
 
 // —————— TFT + PNG dec ——————
 #define TFT_CS 27
@@ -172,23 +179,22 @@ void setupI2SOutput() {
 bool audioPlaying = false;
 
 void audioTask(void* param) {
-  // Usa tu código de playAudio() aquí:
-  File wav = SD.open("/audio/test1.wav");
+  File wav = SD.open("/test1.wav");
   if (!wav) {
-    Serial.println("ERROR: Cannot open WAV");
     audioPlaying = false;
     vTaskDelete(NULL);
     return;
   }
   wav.seek(24);
-  uint32_t sampleRate;
+  uint32_t sampleRate = 0;
   wav.read((uint8_t*)&sampleRate, 4);
   i2s_set_sample_rates(I2S_NUM, sampleRate);
   wav.seek(44);
-  uint8_t buffer[BUFFER_SIZE];
+
+  uint8_t buf[WAV_BUF_SIZE];
   size_t bytesRead, bytesWritten;
-  while ((bytesRead = wav.read(buffer, BUFFER_SIZE)) > 0) {
-    i2s_write(I2S_NUM, buffer, bytesRead, &bytesWritten, portMAX_DELAY);
+  while ((bytesRead = wav.read(buf, WAV_BUF_SIZE)) > 0) {
+    i2s_write(I2S_NUM, buf, bytesRead, &bytesWritten, portMAX_DELAY);
   }
   wav.close();
   audioPlaying = false;
@@ -225,6 +231,14 @@ void setup() {
     tft.println("ERROR: SD no detectada!");
     while (1)
       ;
+  }
+
+  // — SPI HSPI para SD de audio —
+  spiAudio.begin(SD_CLK_AUDIO, SD_MISO_AUDIO, SD_MOSI_AUDIO, SD_CS_AUDIO);
+  pinMode(SD_CS_AUDIO, OUTPUT);
+  if (!SD.begin(SD_CS_AUDIO, spiAudio)) {
+    Serial.println("ERROR: SD audio no inicializada");
+    while (1) delay(100);
   }
 
   // — I2S —
